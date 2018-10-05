@@ -1,3 +1,4 @@
 # Processor
-MIPS architecture 32-bit processor
-32-bit single cycle MIPS CPU in Verilog
+single cycle MIPS architecture 32-bit processor use verilog 
+
+# Only for research purposes
