@@ -1,0 +1,811 @@
+`timescale 1ns / 1ps
+//////////////////////////////////////////////////////////////////////////////////
+// Company: 
+// Engineer: 
+// 
+// Create Date:    10:41:30 09/26/2018 
+// Design Name: 
+// Module Name:    ControlUnit 
+// Project Name: 
+// Target Devices: 
+// Tool versions: 
+// Description: 
+//
+// Dependencies: 
+//
+// Revision: 
+// Revision 0.01 - File Created
+// Additional Comments: 
+//
+//////////////////////////////////////////////////////////////////////////////////
+module CPU(
+    output 	[31:0]	pc, 
+	 output	[31:0]	instruction, 
+	 output	[31:0]	rf_wdata, 
+	 output	[31:0]	rf_rdata1, 
+	 output	[31:0]	rf_rdata2, 
+	 output	[31:0]	ALU_result, 
+	 output				zero_flag, 
+	 input				clk, 
+	 input				rst
+    );
+	 
+	 // internal data
+	wire	[31:0]	pc;
+	wire	[31:0]	next_pc;
+	wire	[31:0]	instruction;
+	wire	[4:0]		rf_waddr;
+	wire	[31:0]	rf_wdata;
+	wire	[31:0]	rf_rdata1;
+	wire	[31:0]	rf_rdata2;
+	wire	[31:0]	sign_extended;
+	wire	[31:0]	ALU_input;
+	wire	[31:0]	ALU_result;
+	wire				zero_flag;
+	wire	[31:0]	dm_rdata;
+	wire	[31:0]	pc4;
+	wire	[31:0]	se_sl2;
+	wire	[31:0]	pc_branch;
+	wire				PCSrc;
+	
+	// control unit signal
+	wire			ins_enable;
+	wire			RegDst;
+	wire			Branch;
+	wire			MemRead;
+	wire			MemtoReg;
+	wire	[1:0]	ALUOp;
+	wire			MemWrite;
+	wire			ALUSrc;
+	wire			RegWrite;
+	// ALU control signal
+	wire	[3:0]	alu_c;
+
+	// connect module
+	ProgramCounter PC_ins(
+		.pc(pc), 
+		.pc_next(next_pc), 
+		.clk(clk), 
+		.rst(rst)
+	);
+	
+	ALU	ALU_ins(
+		.ALU_result(ALU_result),
+		.zero(zero_flag),
+		.A(rf_rdata1),
+		.B(ALU_input),
+		.alu_c(alu_c)
+    );
+	
+	ALUCtrl	ALUCtrl_ins(
+		.alu_c(alu_c),
+		.funct(instruction[5:0]),
+		.ALUOp(ALUOp)
+    );
+    
+    ControlUnit	CU_ins(
+		.RegDst(RegDst),
+		.Branch(Branch),
+		.MemRead(MemRead),
+		.MemtoReg(MemtoReg),
+		.MemWrite(MemWrite),
+		.ALUSrc(ALUSrc),
+		.RegWrite(RegWrite),
+		.ALUOp(ALUOp), 
+		.opcode(instruction[31:26]), 
+		.rst(rst)
+    );
+	
+	DataMemory	DM_ins(
+		.dm_rdata(dm_rdata),
+		.dm_wdata(rf_rdata2),
+		.dm_addr(ALU_result),
+		.MemRead(MemRead),
+		.MemWrite(MemWrite),
+		.clk(clk)
+    );
+	 
+	 InstructionMemory	IM_ins(
+		.pc(pc),
+		.ins(instruction)
+    );
+	 
+	 RegisterFile	RF_ins(
+		.rf_rdata1(rf_rdata1),
+		.rf_rdata2(rf_rdata2),
+		.rf_raddr1(instruction[25:21]),
+		.rf_raddr2(instruction[20:16]),
+		.rf_waddr(rf_waddr),
+		.rf_wdata(rf_wdata),
+		.RegWrite(RegWrite),
+		.clk(clk)
+    );
+	 
+	 mux_5bit	mux_ins0(
+		.out(rf_waddr),
+		.in0(instruction[20:16]),
+		.in1(instruction[15:11]),
+		.select(RegDst)
+    );
+	 
+	 mux_32bit	mux_ins1(
+		.out(ALU_input),
+		.in0(rf_rdata2),
+		.in1(sign_extended),
+		.select(ALUSrc)
+    );
+	 
+	 SignExtend	SE_ins(
+		.out(sign_extended),
+		.in(instruction[15:0])
+    );
+	 
+	 mux_32bit	mux_ins2(
+		.out(rf_wdata),
+		.in0(ALU_result),
+		.in1(dm_rdata),
+		.select(MemtoReg)
+    );
+	 
+	 alu_add	ALU_add_ins0(
+		.A(pc),
+		.B(32'b1),
+		.out(pc4)
+    );
+	 
+	 ShiftLeft2	SL_ins(
+		.out(se_sl2),
+		.in(sign_extended)
+    );
+	 
+	 alu_add	ALU_add_ins1(
+		.A(pc4),
+		.B(se_sl2),
+		.out(pc_branch)
+    );
+	 
+	 and(PCSrc, Branch, zero_flag);
+	 
+	 mux_32bit	mux_ins3(
+		.out(next_pc),
+		.in0(pc4),
+		.in1(pc_branch),
+		.select(PCSrc)
+    );
+	 
+endmodule
+
+`timescale 1ns / 1ps
+//////////////////////////////////////////////////////////////////////////////////
+// Company: 
+// Engineer: 
+// 
+// Create Date:    10:39:34 09/26/2018 
+// Design Name: 
+// Module Name:    ProgramCounter 
+// Project Name: 
+// Target Devices: 
+// Tool versions: 
+// Description: 
+//
+// Dependencies: 
+//
+// Revision: 
+// Revision 0.01 - File Created
+// Additional Comments: 
+//
+//////////////////////////////////////////////////////////////////////////////////
+module ProgramCounter(
+    input 			[31:0]	pc_next,
+	 input						clk,
+	 input						rst,
+    output 	reg	[31:0]	pc
+    );
+	 
+	 always @(posedge clk or posedge rst) begin
+		if(rst) begin
+			pc <= 32'b0;
+		end else begin
+			pc <= pc_next;
+		end
+	 end
+
+endmodule
+
+`timescale 1ns / 1ps
+//////////////////////////////////////////////////////////////////////////////////
+// Company: 
+// Engineer: 
+// 
+// Create Date:    10:28:03 09/26/2018 
+// Design Name: 
+// Module Name:    ALU 
+// Project Name: 
+// Target Devices: 
+// Tool versions: 
+// Description: 
+//
+// Dependencies: 
+//
+// Revision: 
+// Revision 0.01 - File Created
+// Additional Comments: 
+//
+//////////////////////////////////////////////////////////////////////////////////
+module ALU(
+    output	[31:0]	ALU_result,
+    output 				zero,
+    input 	[31:0]	A,
+    input 	[31:0]	B,
+    input 	[3:0]		alu_c
+    );
+	 
+	 parameter	c_add	= 4'b0010;	// add
+	 parameter	c_sub	= 4'b0110;	// sub, beq
+	 parameter	c_and	= 4'b0000;	// and
+	 parameter	c_or	= 4'b0001;	// or
+	 parameter	c_slt	= 4'b0111;	// slt
+	 
+	 assign	ALU_result =	(alu_c==c_add)?(A+B):	
+				(alu_c==c_sub)?(A-B):		// beq (if A==B zero=1 branch)
+				(alu_c==c_and)?(A&B):	
+				(alu_c==c_or)?(A|B):	
+				(alu_c==c_slt && A<B)?32'b1:	// if(a<b) ALU_result=1
+				(alu_c==c_slt && A>=B)?32'b0:ALU_result;	// if (a>=b) ALU_result=0
+				
+	 assign	zero 	= (ALU_result==32'b0)?1'b1:1'b0;	// if(ALU_result==0) zero= 1
+
+endmodule
+
+
+`timescale 1ns / 1ps
+//////////////////////////////////////////////////////////////////////////////////
+// Company: 
+// Engineer: 
+// 
+// Create Date:    10:31:54 09/26/2018 
+// Design Name: 
+// Module Name:    ALUCtrl 
+// Project Name: 
+// Target Devices: 
+// Tool versions: 
+// Description: 
+//
+// Dependencies: 
+//
+// Revision: 
+// Revision 0.01 - File Created
+// Additional Comments: 
+//
+//////////////////////////////////////////////////////////////////////////////////
+module ALUCtrl(
+    output	reg	[3:0]	alu_c,
+    input 			[5:0]	funct,
+    input 			[1:0]	ALUOp
+    );
+	 
+	 // define function
+	parameter	funct_add	= 6'b100000;
+	parameter	funct_sub	= 6'b100010;
+	parameter	funct_and	= 6'b100100;
+	parameter	funct_or		= 6'b100101;
+	parameter	funct_slt	= 6'b101010;
+
+	parameter	c_add		= 4'b0010;	// add
+	parameter	c_sub		= 4'b0110;	// sub, beq
+	parameter	c_and		= 4'b0000;	// and
+	parameter	c_or		= 4'b0001;	// or
+	parameter	c_slt		= 4'b0111;	// slt
+	
+	always @(*) begin
+		case (ALUOp)
+			2'b00:	alu_c = 4'b0010;		// "lw sw addi" use ALU function add
+			2'b01:	alu_c = 4'b0110;		// "beq" use ALU function sub
+			2'b10:	case(funct)
+					funct_add:	alu_c = c_add;	//add
+					funct_sub:	alu_c = c_sub;	//sub
+					funct_and:	alu_c = c_and;	//and
+					funct_or:	alu_c = c_or;	//or
+					funct_slt:	alu_c = c_slt;	//slt
+					default: 	alu_c = alu_c;
+				endcase
+			default: alu_c = alu_c;
+		endcase
+	end
+
+endmodule
+
+
+`timescale 1ns / 1ps
+//////////////////////////////////////////////////////////////////////////////////
+// Company: 
+// Engineer: 
+// 
+// Create Date:    10:08:27 09/26/2018 
+// Design Name: 
+// Module Name:    DataMemory 
+// Project Name: 
+// Target Devices: 
+// Tool versions: 
+// Description: 
+//
+// Dependencies: 
+//
+// Revision: 
+// Revision 0.01 - File Created
+// Additional Comments: 
+//
+//////////////////////////////////////////////////////////////////////////////////
+module DataMemory(
+    output 	[31:0]	dm_rdata,
+    input 	[31:0]	dm_wdata,
+    input 	[7:0]		dm_addr,
+    input 				MemRead,
+    input 				MemWrite,
+    input 				clk
+    );
+	 
+	 reg	[31:0]	datamem [511:0];
+	 
+	 initial begin
+		datamem[0] = 32'h0;
+		datamem[1] = 32'h1;
+		datamem[2] = 32'h2;
+		datamem[3] = 32'haaa;
+		datamem[4] = 32'h4;
+		datamem[5] = 32'h5;
+		datamem[6] = 32'h6;
+		datamem[7] = 32'h7;
+		datamem[8] = 32'h8;
+		datamem[9] = 32'h9;
+		datamem[10]= 32'ha;
+		datamem[11]= 32'hb;
+		datamem[12]= 32'hc;
+		datamem[13]= 32'hd;
+		datamem[14]= 32'he;
+		datamem[15]= 32'hf;
+		datamem[16]= 32'h10;
+		datamem[17]= 32'h11;
+		datamem[18]= 32'h12;
+		datamem[19]= 32'h13;
+		datamem[20]= 32'h14;
+		datamem[21]= 32'h15;
+		datamem[22]= 32'h16;
+		datamem[23]= 32'h17;
+		datamem[24]= 32'h18;
+		datamem[25]= 32'h19;
+		datamem[26]= 32'h1a;
+		datamem[27]= 32'h1b;
+		datamem[28]= 32'h1c;
+		datamem[29]= 32'h1d;
+		datamem[30]= 32'h1e;
+		datamem[31]= 32'h1f;
+	 end
+	 
+	 always @(posedge clk) begin
+		if(MemWrite==1'b1) begin
+			datamem[dm_addr[7:0]] <= dm_wdata[31:0];
+		end
+	 end
+	 
+	 assign dm_rdata = (MemRead)?datamem[dm_addr[7:0]]:32'b0;
+
+endmodule
+
+
+`timescale 1ns / 1ps
+//////////////////////////////////////////////////////////////////////////////////
+// Company: 
+// Engineer: 
+// 
+// Create Date:    09:44:14 09/26/2018 
+// Design Name: 
+// Module Name:    InstructionMemory 
+// Project Name: 
+// Target Devices: 
+// Tool versions: 
+// Description: 
+//
+// Dependencies: 
+//
+// Revision: 
+// Revision 0.01 - File Created
+// Additional Comments: 
+//
+//////////////////////////////////////////////////////////////////////////////////
+module InstructionMemory(
+    input 	[31:0]	pc,
+    output 	[31:0]	ins
+    );
+	 reg	[31:0] insmem	[31:0];
+	 initial begin
+		insmem[0] = 32'b00000000011000100000000000100000;	// add $t0,$t3,$t2; ==> $t0=5
+		insmem[1] = 32'b00000000000000100000100000100010;	// sub $t1,$t0,$t2; ==> $t1=3
+		insmem[2] = 32'b00000000010000110001000000100100;	// and $t2,$t2,$t3; ==> $t2=2
+		insmem[3] = 32'b00000000010000110001100000100101;	// or $t3,$t2,$t3; ==> $t3=3
+		insmem[4] = 32'b00000000110001010010000000101010;	// slt $t4,$t6,$t5; ==> $t4=0
+		insmem[5] = 32'b00000000110001110010100000101010;	// slt $t5,$t6,$t7; ==> $t5=1
+		insmem[6] = 32'b00100000001001100000000000000010;	// addi $t6,$t1,$2 ==> $t6=5
+		insmem[7] = 32'b10001100001000000000000000000000;   // lw $t0, 0($t1) ==> $t0=3
+		insmem[8] = 32'b10101100010000000000000000000000;	// sw $t0, 0($t2) ==> data_memory[2]=value_reg_memory[0]
+		insmem[9] = 32'b10001100010000000000000000000000;	// lw $t0, 0($t2) ==> $t0=3 // lw $t0, 0($t2) ==> $t0=3
+		insmem[10] = 32'b00010000001000110000000000000001;  // beq $t1, $t3, 1  ==> next_pc = (pc+1)+(offset*4)
+		insmem[11] = 32'b00000000010000110001000000100100;	
+		insmem[12] = 32'b00000000010000110001000000100100;
+		insmem[13] = 32'b00000000010000110001000000100100;
+		insmem[14] = 32'b00000000010000110001000000100100; 
+		insmem[15] = 32'b00000000011000100000000000100000;  // offset=1 beq to here __ add $t0,$t3,$t2; ==> $t0=5
+		insmem[16] = 32'b00000000010000110001000000100100;	
+		insmem[17] = 32'b00000000010000110001000000100100;  
+		insmem[18] = 32'bx;
+		insmem[19] = 32'b00000000000000100000100000100010;  // offset=10 beq to here __ sub $t1,$t0,$t2; ==> $t1=3
+		insmem[20] = 32'b00100000001001100000000000000010;
+		insmem[21] = 32'b00100000001001100000000000000010;
+		insmem[22] = 32'b00100000001001100000000000000010;
+		insmem[23] = 32'b00100000001001100000000000000010;
+		
+	 end
+	 
+	 assign ins	= insmem[pc];
+
+endmodule
+
+
+`timescale 1ns / 1ps
+//////////////////////////////////////////////////////////////////////////////////
+// Company: 
+// Engineer: 
+// 
+// Create Date:    09:56:03 09/26/2018 
+// Design Name: 
+// Module Name:    RegisterFile 
+// Project Name: 
+// Target Devices: 
+// Tool versions: 
+// Description: 
+//
+// Dependencies: 
+//
+// Revision: 
+// Revision 0.01 - File Created
+// Additional Comments: 
+//
+//////////////////////////////////////////////////////////////////////////////////
+module RegisterFile(
+    output	reg	[31:0]	rf_rdata1,
+    output	reg	[31:0]	rf_rdata2,
+    input			[4:0]		rf_raddr1,
+    input 			[4:0]		rf_raddr2,
+    input 			[4:0]		rf_waddr,
+    input 			[31:0]	rf_wdata,
+    input 						RegWrite,
+    input 						clk
+    );
+	 
+	 reg	[31:0]	regmem [31:0];
+	 
+	 initial begin
+		regmem[0] = 32'h0;
+		regmem[1] = 32'h1;
+		regmem[2] = 32'h2;
+		regmem[3] = 32'h3;
+		regmem[4] = 32'h4;
+		regmem[5] = 32'h5;
+		regmem[6] = 32'h6;
+		regmem[7] = 32'h7;
+		regmem[8] = 32'h8;
+		regmem[9] = 32'h9;
+		regmem[10] = 32'ha;
+		regmem[11] = 32'hb;
+		regmem[12] = 32'hc;
+		regmem[13] = 32'hd;
+		regmem[14] = 32'he;
+		regmem[15] = 32'hf;
+		regmem[16] = 32'h10;
+		regmem[17] = 32'h11;
+		regmem[18] = 32'h12;
+		regmem[19] = 32'h13;
+		regmem[20] = 32'h14;
+		regmem[21] = 32'h15;
+		regmem[22] = 32'h16;
+		regmem[23] = 32'h17;
+		regmem[24] = 32'h18;
+		regmem[25] = 32'h19;
+		regmem[26] = 32'h1a;
+		regmem[27] = 32'h1b;
+		regmem[28] = 32'h1c;
+		regmem[29] = 32'h1d;
+		regmem[30] = 32'h1e;
+		regmem[31] = 32'h1f;
+	 end
+	 
+	 always @(*) begin
+		rf_rdata1 <= regmem[rf_raddr1];
+		rf_rdata2 <= regmem[rf_raddr2];
+	 end
+	 
+	 always @(posedge clk) begin
+		if(RegWrite) begin
+			regmem[rf_waddr] <= rf_wdata;
+		end
+	 end
+
+endmodule
+
+
+
+`timescale 1ns / 1ps
+//////////////////////////////////////////////////////////////////////////////////
+// Company: 
+// Engineer: 
+// 
+// Create Date:    10:23:06 09/26/2018 
+// Design Name: 
+// Module Name:    mux_5bit 
+// Project Name: 
+// Target Devices: 
+// Tool versions: 
+// Description: 
+//
+// Dependencies: 
+//
+// Revision: 
+// Revision 0.01 - File Created
+// Additional Comments: 
+//
+//////////////////////////////////////////////////////////////////////////////////
+module mux_5bit(
+    output 	[4:0]	out,
+    input 	[4:0]	in0,
+    input 	[4:0]	in1,
+    input 			select
+    );
+
+	 assign	out	= (select==0)?in0:in1;
+	 
+endmodule
+
+
+`timescale 1ns / 1ps
+//////////////////////////////////////////////////////////////////////////////////
+// Company: 
+// Engineer: 
+// 
+// Create Date:    10:24:19 09/26/2018 
+// Design Name: 
+// Module Name:    mux_32bit 
+// Project Name: 
+// Target Devices: 
+// Tool versions: 
+// Description: 
+//
+// Dependencies: 
+//
+// Revision: 
+// Revision 0.01 - File Created
+// Additional Comments: 
+//
+//////////////////////////////////////////////////////////////////////////////////
+module mux_32bit(
+    output 	[31:0]	out,
+    input 	[31:0]	in0,
+    input 	[31:0]	in1,
+    input 				select
+    );
+
+	 assign	out	= (select==0)?in0:in1;
+	 
+endmodule
+
+
+`timescale 1ns / 1ps
+//////////////////////////////////////////////////////////////////////////////////
+// Company: 
+// Engineer: 
+// 
+// Create Date:    10:26:56 09/26/2018 
+// Design Name: 
+// Module Name:    SignExtend 
+// Project Name: 
+// Target Devices: 
+// Tool versions: 
+// Description: 
+//
+// Dependencies: 
+//
+// Revision: 
+// Revision 0.01 - File Created
+// Additional Comments: 
+//
+//////////////////////////////////////////////////////////////////////////////////
+module SignExtend(
+    output	[31:0]	out,
+    input 	[15:0]	in
+    );
+	 
+	 assign	out	= {{16{in[15]}},in};
+
+endmodule
+
+
+
+`timescale 1ns / 1ps
+//////////////////////////////////////////////////////////////////////////////////
+// Company: 
+// Engineer: 
+// 
+// Create Date:    09:38:46 09/26/2018 
+// Design Name: 
+// Module Name:    alu_add 
+// Project Name: 
+// Target Devices: 
+// Tool versions: 
+// Description: 
+//
+// Dependencies: 
+//
+// Revision: 
+// Revision 0.01 - File Created
+// Additional Comments: 
+//
+//////////////////////////////////////////////////////////////////////////////////
+module alu_add(
+    input	[31:0]	A,
+    input 	[31:0]	B,
+    output 	[31:0]	out
+    );
+	 
+	 assign out = A+B;
+
+endmodule
+
+
+`timescale 1ns / 1ps
+//////////////////////////////////////////////////////////////////////////////////
+// Company: 
+// Engineer: 
+// 
+// Create Date:    10:25:22 09/26/2018 
+// Design Name: 
+// Module Name:    ShiftLeft2 
+// Project Name: 
+// Target Devices: 
+// Tool versions: 
+// Description: 
+//
+// Dependencies: 
+//
+// Revision: 
+// Revision 0.01 - File Created
+// Additional Comments: 
+//
+//////////////////////////////////////////////////////////////////////////////////
+module ShiftLeft2(
+    output	[31:0]	out,
+	 input	[31:0]	in
+    );
+	 
+	 assign	out	= in<<2;
+
+endmodule
+
+
+`timescale 1ns / 1ps
+//////////////////////////////////////////////////////////////////////////////////
+// Company: 
+// Engineer: 
+// 
+// Create Date:    10:41:30 09/26/2018 
+// Design Name: 
+// Module Name:    ControlUnit 
+// Project Name: 
+// Target Devices: 
+// Tool versions: 
+// Description: 
+//
+// Dependencies: 
+//
+// Revision: 
+// Revision 0.01 - File Created
+// Additional Comments: 
+//
+//////////////////////////////////////////////////////////////////////////////////
+
+module ControlUnit(
+	 output	reg				RegDst,
+	 output	reg				Branch,
+	 output	reg				MemRead,
+	 output	reg				MemtoReg,
+	 output	reg				MemWrite,
+	 output	reg				ALUSrc,
+	 output	reg				RegWrite,
+	 output	reg	[1:0]		ALUOp, 
+	 input	[5:0]				opcode, 
+	 input						rst
+    );
+	 
+	 parameter Rtype	= 6'b000000;
+	 parameter addi	= 6'b001000;
+	 parameter lw		= 6'b100011;
+	 parameter sw		= 6'b101011;
+	 parameter beq		= 6'b000100;
+
+	always @(*) begin
+		if(rst) begin
+			RegDst	= 1'b0;
+			Branch	= 1'b0;
+			MemRead	= 1'b0;
+			MemtoReg	= 1'b0;
+			MemWrite	= 1'b0;
+			ALUSrc	= 1'b0;
+			RegWrite	= 1'b0;
+			ALUOp		= 2'b0;
+		end else begin
+			case(opcode)
+				Rtype: begin
+					RegDst	= 1'b1;
+					Branch	= 1'b0;
+					MemRead	= 1'b0;
+					MemtoReg	= 1'b0;
+					MemWrite	= 1'b0;
+					ALUSrc	= 1'b0;
+					RegWrite	= 1'b1;
+					ALUOp		= 2'b10;
+				end
+				addi: begin
+					RegDst	= 1'b0;
+					Branch	= 1'b1;
+					MemRead	= 1'b0;
+					MemtoReg	= 1'b0;
+					MemWrite	= 1'b0;
+					ALUSrc	= 1'b1;
+					RegWrite	= 1'b1;
+					ALUOp		= 2'b00;			
+				end
+				lw: begin
+					RegDst	= 1'b0;
+					Branch	= 1'b0;
+					MemRead	= 1'b1;
+					MemtoReg	= 1'b1;
+					MemWrite	= 1'b0;
+					ALUSrc	= 1'b1;
+					RegWrite	= 1'b1;
+					ALUOp		= 2'b00;
+				end
+				sw: begin
+					RegDst	= 1'bx;
+					Branch	= 1'b0;
+					MemRead	= 1'b0;
+					MemtoReg	= 1'bx;
+					MemWrite	= 1'b1;
+					ALUSrc	= 1'b1;
+					RegWrite	= 1'b0;
+					ALUOp		= 2'b00;
+				end
+				beq: begin
+					RegDst	= 1'bx;
+					Branch	= 1'b1;
+					MemRead	= 1'b0;
+					MemtoReg	= 1'bx;
+					MemWrite	= 1'b0;
+					ALUSrc	= 1'b0;
+					RegWrite	= 1'b0;
+					ALUOp		= 2'b01;
+				end
+				default: begin			// default is Rtype
+					RegDst	= 1'b1;
+					Branch	= 1'b0;
+					MemRead	= 1'b0;
+					MemtoReg	= 1'b0;
+					MemWrite	= 1'b0;
+					ALUSrc	= 1'b0;
+					RegWrite	= 1'b1;
+					ALUOp		= 2'b10;
+				end
+			endcase
+		end
+	
+	end
+	 
+endmodule
+
