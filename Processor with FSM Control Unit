@@ -1,0 +1,589 @@
+/**************************** MIPS 32bit ****************************/
+/**************************** CPU ****************************/
+module CPU(pc, instruction, rf_wdata, rf_rdata1, rf_rdata2, ALU_result, zero_flag, clk, rst);
+	// input output
+	output	[31:0]	pc;		// pc
+	output	[31:0]	instruction;	// instruction executing
+	output	[31:0]	rf_wdata;	// wb data
+	output	[31:0]	rf_rdata1;	// read data 1
+	output	[31:0]	rf_rdata2;	// stored data (sw)
+	output  [31:0]  ALU_result;
+	output		zero_flag;		// zero flag
+	input		clk;
+	input		rst;
+	
+
+	// internal data
+	wire	[31:0]	pc;
+	wire	[31:0]	next_pc;
+	wire	[31:0]	instruction;
+	wire	[4:0]	rf_waddr;
+	wire	[31:0]	rf_wdata;
+	wire	[31:0]	rf_rdata1;
+	wire	[31:0]	rf_rdata2;
+	wire	[31:0]	sign_extended;
+	wire	[31:0]	ALU_input;
+	wire	[31:0]	ALU_result;
+	wire		zero_flag;
+	wire	[31:0]	dm_rdata;
+	wire	[31:0]	pc4;
+	wire	[31:0]	se_sl2;
+	wire	[31:0]	pc_branch;
+	wire		PCSrc;
+	
+	// control unit signal
+	wire		ins_enable;
+	wire		RegDst;
+	wire		Branch;
+	wire		MemRead;
+	wire		MemtoReg;
+	wire	[1:0]	ALUOp;
+	wire		MemWrite;
+	wire		ALUSrc;
+	wire		RegWrite;
+	// ALU control signal
+	wire	[3:0]	alu_c;
+
+	// connect module
+	ProgramCounter PC_ins(
+		.pc(pc), 
+		.next_pc(next_pc), 
+		.clk(clk), 
+		.rst(rst)
+	);
+
+	InstructionMemory IM_ins(
+		.instruction(instruction), 
+		.pc(pc), 
+		.clk(clk), 
+		.ins_enable(ins_enable)
+	);
+
+	mux_5bit mux_ins0(
+		.out(rf_waddr), 
+		.in0(instruction[20:16]), 
+		.in1(instruction[15:11]), 
+		.select(RegDst)
+	);
+
+	RegistersFile RF_ins(
+		.rf_rdata1(rf_rdata1), 
+		.rf_rdata2(rf_rdata2), 
+		.rf_raddr1(instruction[25:21]), 
+		.rf_raddr2(instruction[20:16]), 
+		.rf_waddr(rf_waddr), 
+		.rf_wdata(rf_wdata), 
+		.RegWrite(RegWrite),
+		.clk(clk)
+	);
+	
+	SignExtend SE_ins(
+		.out(sign_extended), 
+		.in(instruction[15:0])
+	);
+	
+	mux_32bit mux_ins1(
+		.out(ALU_input), 
+		.in0(rf_rdata2), 
+		.in1(sign_extended), 
+		.select(ALUSrc)
+	);
+	
+	ALU ALU_ins(
+		.ALU_result(ALU_result), 
+		.zero(zero_flag), 
+		.A(rf_rdata1), 
+		.B(ALU_input), 
+		.alu_c(alu_c)
+	);
+
+	DataMemory DM_ins(
+		.dm_rdata(dm_rdata), 
+		.dm_addr(ALU_result[7:0]), 
+		.dm_wdata(rf_rdata2), 
+		.MemRead(MemRead), 
+		.MemWrite(MemWrite), 
+		.clk(clk)
+	);
+	
+	mux_32bit mux_ins2(
+		.out(rf_wdata), 
+		.in0(ALU_result), 
+		.in1(dm_rdata), 
+		.select(MemtoReg)
+	);
+	
+	ALU_add ALU_add_ins0(
+		.ALU_add_result(pc4), 
+		.A(pc), 
+		.B(32'b1)		// pc+1
+	);
+	
+	ShiftLeft2b SL_ins(
+		.out(se_sl2), 
+		.in(sign_extended)
+	);
+
+	ALU_add ALU_add_ins1(
+		.ALU_add_result(pc_branch), 
+		.A(pc4), 
+		.B(se_sl2)
+	);
+	
+	and and2_ins(PCSrc, Branch, zero_flag);
+
+	mux_32bit mux_ins3(
+		.out(next_pc), 
+		.in0(pc4), 
+		.in1(pc_branch), 
+		.select(PCSrc)
+	);
+	
+	ControlUnit CU_ins(
+		.ins_enable(ins_enable), 
+		.RegDst(RegDst), 
+		.Branch(Branch), 
+		.MemRead(MemRead), 
+		.MemtoReg(MemtoReg), 
+		.ALUOp(ALUOp), 
+		.MemWrite(MemWrite), 
+		.ALUSrc(ALUSrc), 
+		.RegWrite(RegWrite), 
+		.ins_opcode(instruction[31:26]), 
+		.clk(clk), 
+		.rst(rst)
+	);	
+
+	ALUCtrl ALUCtrl_ins(
+		.alu_c(alu_c), 
+		.funct(instruction[5:0]), 
+		.ALUOp(ALUOp)
+	);
+endmodule
+
+/*** ALU ***/
+module ALU(ALU_result, zero, A, B, alu_c);
+	output	[31:0]	ALU_result;
+	output		zero;
+	input	[31:0]	A, B;
+	input	[3:0]	alu_c;
+
+	parameter	c_add	= 4'b0010;	// add
+	parameter	c_sub	= 4'b0110;	// sub, beq
+	parameter	c_and	= 4'b0000;	// and
+	parameter	c_or	= 4'b0001;	// or
+	parameter	c_slt	= 4'b0111;	// slt
+	
+
+	assign	ALU_result =	(alu_c==c_add)?(A+B):	
+				(alu_c==c_sub)?(A-B):		// beq (if A==B zero=1 branch)
+				(alu_c==c_and)?(A&B):	
+				(alu_c==c_or)?(A|B):	
+				(alu_c==c_slt && A<B)?32'b1:	// if(a<b) ALU_result=1
+				(alu_c==c_slt && A>=B)?32'b0:ALU_result;	// if (a>=b) ALU_result=0
+	assign	zero 	= (ALU_result==32'b0)?1'b1:1'b0;	// if(ALU_result==0) zero= 1
+endmodule
+
+/*** ALU add ***/
+module ALU_add(ALU_add_result, A, B);
+	output	[31:0]	ALU_add_result;
+	input	[31:0]	A, B;
+	
+	assign ALU_add_result	= A+B;
+endmodule
+
+/************************ ALU control ************************/
+module ALUCtrl(alu_c, funct, ALUOp);
+	output	[3:0]	alu_c;
+	input	[5:0]	funct;
+	input	[1:0]	ALUOp;
+	
+	reg	[3:0]	alu_c;
+
+	// define function
+	parameter	funct_add	= 6'b100000;
+	parameter	funct_sub	= 6'b100010;
+	parameter	funct_and	= 6'b100100;
+	parameter	funct_or	= 6'b100101;
+	parameter	funct_slt	= 6'b101010;
+
+	parameter	c_add		= 4'b0010;	// add
+	parameter	c_sub		= 4'b0110;	// sub, beq
+	parameter	c_and		= 4'b0000;	// and
+	parameter	c_or		= 4'b0001;	// or
+	parameter	c_slt		= 4'b0111;	// slt
+
+	always @(*) begin
+		case (ALUOp)
+			2'b00:	alu_c = 4'b0010;		// "lw sw addi" use ALU function add
+			2'b01:	alu_c = 4'b0110;		// "beq" use ALU function sub
+			2'b10:	case(funct)
+					funct_add:	alu_c = c_add;	//add
+					funct_sub:	alu_c = c_sub;	//sub
+					funct_and:	alu_c = c_and;	//and
+					funct_or:	alu_c = c_or;	//or
+					funct_slt:	alu_c = c_slt;	//slt
+					default: 	alu_c = alu_c;
+				endcase
+			default: alu_c = alu_c;
+		endcase
+	end
+endmodule
+
+/************************ Control Unit ************************/
+module ControlUnit(ins_enable, RegDst, Branch, MemRead, MemtoReg, ALUOp, MemWrite, ALUSrc, RegWrite, ins_opcode, clk, rst);
+	output 		ins_enable;
+	output          RegDst;
+	output          Branch;
+	output          MemRead;
+	output          MemtoReg;
+	output          MemWrite;
+	output          ALUSrc;
+	output          RegWrite;
+	output	[1:0]	ALUOp;
+	input	[5:0]	ins_opcode;
+	input		clk, rst;
+	
+	// opcode parameter
+	parameter	Rtype 	= 6'b000000;	// add sub and or slt
+	parameter	addi 	= 6'b001000;
+	parameter	lw	= 6'b100011;
+	parameter	sw 	= 6'b101011;
+	parameter	beq	= 6'b000100;
+
+	// internal data
+	reg	[3:0]	state;
+	reg	[3:0]	next_state;
+	
+	// state declaration
+	parameter reset		    = 4'b0000;
+	parameter InsF		     = 4'b0001;
+	parameter ID		       = 4'b0010;
+	parameter EXE_Rtype  = 4'b0011;
+	parameter EXE_lwsw	  = 4'b0100;
+	parameter EXE_beq	   = 4'b0101;
+	parameter EXE_addi	  = 4'b0110;
+	parameter MEM_lw	    = 4'b0111;
+	parameter MEM_sw    	= 4'b1000;
+	parameter WB		       = 4'b1001;
+
+    //combinational next state
+	always @(rst or ins_opcode or state) begin
+		case (state)
+		    reset: begin
+		      next_state = InsF; 
+		    end
+		    InsF: begin
+		        next_state = ID;
+		    end
+		    ID: begin
+		        if (ins_opcode==Rtype) begin
+		            next_state = EXE_Rtype;
+		        end
+		        if (ins_opcode==addi) begin
+		            next_state = EXE_addi;
+		        end
+		        if (ins_opcode==lw || ins_opcode==sw) begin
+		            next_state = EXE_lwsw;
+		        end
+		        if (ins_opcode==beq) begin
+		            next_state = EXE_beq;
+		        end
+		    end
+		    EXE_Rtype: begin
+		        next_state = WB;
+		    end
+		    EXE_lwsw: begin
+		        if (ins_opcode==lw) begin
+		            next_state = MEM_lw;
+		        end
+		        if (ins_opcode==sw) begin
+		            next_state = MEM_sw;
+		        end
+		    end
+		    EXE_beq: begin
+		        next_state = InsF;
+		    end
+		    EXE_addi: begin
+		        next_state = WB;
+		    end
+		    MEM_lw: begin
+		        next_state = WB;
+		    end
+		    MEM_sw: begin
+		        next_state = InsF;
+		    end
+		    WB: begin
+		        next_state = InsF;
+		    end
+		    default: next_state = InsF;
+		endcase
+	end
+	
+	// sequence logic
+	always @(posedge clk) begin
+	    if (rst==1'b1) begin
+	        state <= reset;
+	    end else begin
+	       state <= next_state;
+	    end
+	end
+	
+	// combinational output logic
+	assign  ins_enable  = (state==InsF)?1'b1:1'b0;
+	assign  RegDst      = (state==ID && ins_opcode==Rtype)?1'b1:(state==ID && ins_opcode==lw)?1'b0:RegDst;
+	assign  Branch      = (state==EXE_beq || state==EXE_addi)?1'b1:1'b0;
+	assign  MemRead     = (state==MEM_lw)?1'b1:1'b0;
+	assign  MemtoReg    = (ins_opcode==lw)?1'b1:1'b0;
+	assign  MemWrite    = (state==MEM_sw)?1'b1:1'b0;
+	assign  ALUSrc      = (state==EXE_lwsw || ins_opcode==addi || state==MEM_lw || state==MEM_sw)?1'b1:1'b0;
+	assign  RegWrite    = (state==EXE_Rtype || (state==EXE_addi && ins_opcode==addi) || (state==EXE_lwsw && ins_opcode==lw))?1'b1:1'b0;
+	assign  ALUOp       = (state==EXE_Rtype)?2'b10:(state==EXE_addi || state==EXE_lwsw)?2'b00:(state==EXE_beq)?2'b01:ALUOp;
+endmodule
+
+/*** Data Memory ***/
+module DataMemory(dm_rdata, dm_addr, dm_wdata, MemRead, MemWrite, clk);
+	output	[31:0]	dm_rdata;
+	input	[31:0]	dm_wdata;
+	input	[7:0]	dm_addr;
+	input		MemRead;
+	input		MemWrite;
+	input		clk;
+
+	reg	[31:0]	dm_rdata;
+
+	// data memory with 512 data
+	reg	[31:0]	datamem [511:0];
+
+	initial begin
+		// read data from a file and store it in datamem
+		// $readmemb("datamem.txt", datamem, 31, 0);
+
+		// or create data
+		datamem[0] = 32'h0;
+		datamem[1] = 32'h1;
+		datamem[2] = 32'h2;
+		datamem[3] = 32'haaa;
+		datamem[4] = 32'h4;
+		datamem[5] = 32'h5;
+		datamem[6] = 32'h6;
+		datamem[7] = 32'h7;
+		datamem[8] = 32'h8;
+		datamem[9] = 32'h9;
+		datamem[10]= 32'ha;
+		datamem[11]= 32'hb;
+		datamem[12]= 32'hc;
+		datamem[13]= 32'hd;
+		datamem[14]= 32'he;
+		datamem[15]= 32'hf;
+		datamem[16]= 32'h10;
+		datamem[17]= 32'h11;
+		datamem[18]= 32'h12;
+		datamem[19]= 32'h13;
+		datamem[20]= 32'h14;
+		datamem[21]= 32'h15;
+		datamem[22]= 32'h16;
+		datamem[23]= 32'h17;
+		datamem[24]= 32'h18;
+		datamem[25]= 32'h19;
+		datamem[26]= 32'h1a;
+		datamem[27]= 32'h1b;
+		datamem[28]= 32'h1c;
+		datamem[29]= 32'h1d;
+		datamem[30]= 32'h1e;
+		datamem[31]= 32'h1f;
+		
+		// ...
+	end
+	always @(posedge clk) begin
+		if(MemRead==1'b1) begin
+			dm_rdata <= datamem[dm_addr[7:0]];
+		end
+		if(MemWrite==1'b1) begin
+			datamem[dm_addr[7:0]] <= dm_wdata[31:0];
+		end
+	end
+endmodule
+
+/*** Instruction memory block ***/
+module InstructionMemory(instruction, pc, clk, ins_enable);
+	output	[31:0]	instruction;
+	input	[31:0]	pc;
+	input 		clk;
+	input		ins_enable;
+
+	reg	[31:0]	instruction;
+
+	// insmem contains 128 instruction, each instruction have 32 bits
+	reg	[31:0]	insmem [127:0];
+
+	initial begin
+		// read data from a file and store it in insmem
+		// $readmemb("insmem.txt", insmem, 31, 0);
+
+		// or create instruction
+		insmem[0] = 32'b00000000011000100000000000100000;	// add $t0,$t3,$t2; ==> $t0=5
+		insmem[1] = 32'b00000000000000100000100000100010;	// sub $t1,$t0,$t2; ==> $t1=3
+		insmem[2] = 32'b00000000010000110001000000100100;	// and $t2,$t2,$t3; ==> $t2=2
+		insmem[3] = 32'b00000000010000110001100000100101;	// or $t3,$t2,$t3; ==> $t3=3
+		insmem[4] = 32'b00000000110001010010000000101010;	// slt $t4,$t6,$t5; ==> $t4=0
+		insmem[5] = 32'b00000000110001110010100000101010;	// slt $t5,$t6,$t7; ==> $t5=1
+		insmem[6] = 32'b00100000001001100000000000000010;	// addi $t6,$t1,$2 ==> $t6=5
+		insmem[7] = 32'b10001100001000000000000000000000;   // lw $t0, 0($t1) ==> $t0=3
+		insmem[8] = 32'b10101100010000000000000000000000;	// sw $t0, 0($t2) ==> data_memory[2]=value_reg_memory[0]
+		insmem[9] = 32'b10001100010000000000000000000000;	// lw $t0, 0($t2) ==> $t0=3 // lw $t0, 0($t2) ==> $t0=3
+		insmem[10] = 32'b00010000001000110000000000000101;  // beq $t1, $t3, 5
+		insmem[11] = 32'b00000000010000110001000000100100;	
+		insmem[12] = 32'b00000000010000110001000000100100;
+		insmem[13] = 32'b00000000010000110001000000100100;
+		insmem[14] = 32'b00000000010000110001000000100100; 
+		insmem[15] = 32'b00000000010000110001000000100100;
+		insmem[16] = 32'b00000000011000100000000000100000;	// offset=100 beq to here __ add $t0,$t3,$t2; ==> $t0=5
+		insmem[17] = 32'b00000000000000100000100000100010;  // offset=101 beq to here __ sub $t1,$t0,$t2; ==> $t1=3
+		insmem[18] = 32'bx;
+		insmem[19] = 32'bx;
+		insmem[20] = 32'bx;
+		insmem[21] = 32'bx;
+		insmem[22] = 32'bx;
+		insmem[23] = 32'bx;
+		insmem[24] = 32'bx;	
+		insmem[25] = 32'bx;
+		insmem[26] = 32'bx;
+		insmem[27] = 32'bx;
+		insmem[28] = 32'bx;
+		insmem[29] = 32'bx;
+		insmem[30] = 32'bx;
+		insmem[31] = 32'bx;
+		
+	
+	end
+	always @(posedge clk) begin
+		if(ins_enable==1'b1) begin
+			instruction <= insmem[pc>>2];
+		end else begin
+			instruction <= instruction;
+		end
+	end
+endmodule
+
+/*** mux 2 to 1 with 5bit input ***/
+module mux_5bit(out, in0, in1, select);
+	output	[4:0]	out;
+	input	[4:0]	in0, in1;
+	input		select;
+
+	assign	out	= (select==0)?in0:in1;
+endmodule
+
+/*** mux 2 to 1 with 32bit input ***/
+module mux_32bit(out, in0, in1, select);
+	output	[31:0]	out;
+	input	[31:0]	in0, in1;
+	input		select;
+
+	assign	out	= (select==0)?in0:in1;
+endmodule
+
+/*** PC block ***/
+module ProgramCounter(pc, next_pc, clk, rst);
+	output	[31:0]	pc;
+	input	[31:0]	next_pc;
+	input		clk;
+	input		rst;
+	
+	reg	[31:0]	pc;
+
+	initial begin
+		pc = 32'b0;
+	end
+
+	always @(posedge clk) begin
+		if(rst==1'b1) begin
+			pc = 32'b0;
+		end else begin
+			pc = next_pc;
+		end
+	end
+endmodule
+
+/*** Registers file ***/
+module RegistersFile(rf_rdata1, rf_rdata2, rf_raddr1, rf_raddr2, rf_waddr, rf_wdata, RegWrite, clk);
+	output	[31:0]	rf_rdata1, rf_rdata2;
+	input	[4:0]	rf_raddr1, rf_raddr2;
+	input	[4:0]	rf_waddr;
+	input	[31:0]	rf_wdata;
+	input		RegWrite;
+	input		clk;
+	
+	reg	[31:0]	rf_rdata1, rf_rdata2;
+	
+	// register file memory
+	reg	[31:0]	regmem [31:0];
+		
+	initial begin
+		// read data from a file and store it in regmem
+		// $readmemb("regmem.txt", regmem, 31, 0);
+
+		// or create data
+		regmem[0] = 32'h0;
+		regmem[1] = 32'h1;
+		regmem[2] = 32'h2;
+		regmem[3] = 32'h3;
+		regmem[4] = 32'h4;
+		regmem[5] = 32'h5;
+		regmem[6] = 32'h6;
+		regmem[7] = 32'h7;
+		regmem[8] = 32'h8;
+		regmem[9] = 32'h9;
+		regmem[10] = 32'ha;
+		regmem[11] = 32'hb;
+		regmem[12] = 32'hc;
+		regmem[13] = 32'hd;
+		regmem[14] = 32'he;
+		regmem[15] = 32'hf;
+		regmem[16] = 32'h10;
+		regmem[17] = 32'h11;
+		regmem[18] = 32'h12;
+		regmem[19] = 32'h13;
+		regmem[20] = 32'h14;
+		regmem[21] = 32'h15;
+		regmem[22] = 32'h16;
+		regmem[23] = 32'h17;
+		regmem[24] = 32'h18;
+		regmem[25] = 32'h19;
+		regmem[26] = 32'h1a;
+		regmem[27] = 32'h1b;
+		regmem[28] = 32'h1c;
+		regmem[29] = 32'h1d;
+		regmem[30] = 32'h1e;
+		regmem[31] = 32'h1f;
+		// ...
+	end
+	always @(posedge clk) begin
+		rf_rdata1 <= regmem[rf_raddr1];
+		rf_rdata2 <= regmem[rf_raddr2];
+		if(RegWrite==1'b1) begin
+			regmem[rf_waddr] <= rf_wdata;
+			// to check data in registers files
+			// $writememb("regmem_out.txt", regmem);
+		end
+	end
+endmodule
+
+/*** Shift Left 2 bit ***/
+module ShiftLeft2b(out, in);
+	output	[31:0]	out;
+	input	[31:0]	in;
+
+	assign	out	= in<<2;
+endmodule
+
+/*** Sign extend ***/
+module SignExtend(out, in);
+	output	[31:0]	out;
+	input	[15:0]	in;
+
+	assign	out	= {{16{in[15]}},in};
+endmodule
+
+
